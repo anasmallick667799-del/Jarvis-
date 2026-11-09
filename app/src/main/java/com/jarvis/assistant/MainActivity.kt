@@ -112,3 +112,82 @@ fun JarvisScreen() {
         )
 
         LazyColumn(modifier = Modifier.weight(1f).fillMaxWidth()) {
+                        items(messages) { (who, text) ->
+                Column(modifier = Modifier.padding(vertical = 6.dp)) {
+                    Text(who, color = Color(0xFF4FC3F7), fontSize = 12.sp)
+                    Text(
+                        text,
+                        color = Color(0xFFE3F2FD),
+                        fontSize = 15.sp,
+                        modifier = Modifier
+                            .background(Color(0xFF0A1B33), RoundedCornerShape(12.dp))
+                            .padding(12.dp)
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun Orb(state: JState, onClick: () -> Unit) {
+    val t = rememberInfiniteTransition(label = "orb")
+    val pulse by t.animateFloat(
+        1f, 1.12f,
+        infiniteRepeatable(tween(900, easing = FastOutSlowInEasing), RepeatMode.Reverse),
+        label = "pulse"
+    )
+    val scale = if (state == JState.SLEEPING) 1f else pulse
+
+    Box(
+        contentAlignment = Alignment.Center,
+        modifier = Modifier.size(220.dp)
+    ) {
+        Box(
+            Modifier
+                .size(200.dp)
+                .scale(scale)
+                .background(
+                    Brush.radialGradient(listOf(state.color.copy(alpha = 0.35f), Color.Transparent)),
+                    CircleShape
+                )
+        )
+        Box(
+            contentAlignment = Alignment.Center,
+            modifier = Modifier
+                .size(130.dp)
+                .clip(CircleShape)
+                .background(Brush.radialGradient(listOf(Color(0xFF81D4FA), Color(0xFF0D47A1))))
+                .border(2.dp, state.color, CircleShape)
+                .clickable(onClick = onClick)
+        ) {
+            Text("MIC", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 18.sp)
+        }
+    }
+}
+
+@Composable
+fun Wave(active: Boolean, color: Color) {
+    val t = rememberInfiniteTransition(label = "wave")
+    Row(
+        modifier = Modifier.height(60.dp).fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceEvenly,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        for (i in 0 until 20) {
+            val h by t.animateFloat(
+                0.15f, 1f,
+                infiniteRepeatable(tween(350 + i * 41, easing = LinearEasing), RepeatMode.Reverse),
+                label = "bar$i"
+            )
+            Box(
+                Modifier
+                    .width(6.dp)
+                    .fillMaxHeight(if (active) h else 0.1f)
+                    .clip(RoundedCornerShape(3.dp))
+                    .background(color)
+            )
+        }
+    }
+}
+            
