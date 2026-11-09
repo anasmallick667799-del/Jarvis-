@@ -6,6 +6,7 @@ import androidx.activity.compose.setContent
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -23,6 +24,7 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
@@ -48,24 +50,57 @@ class MainActivity : ComponentActivity() {
 }
 
 @Composable
+fun SmallButton(label: String, color: Color = Color(0xFF4FC3F7), onClick: () -> Unit) {
+    Text(
+        label,
+        color = color,
+        fontSize = 11.sp,
+        fontWeight = FontWeight.Bold,
+        modifier = Modifier
+            .border(1.dp, color, RoundedCornerShape(16.dp))
+            .clickable(onClick = onClick)
+            .padding(horizontal = 8.dp, vertical = 6.dp)
+    )
+}
+
+@Composable
 fun JarvisScreen() {
     val context = LocalContext.current
     val engine = remember { CommandEngine(context.applicationContext) }
     var state by remember { mutableStateOf(JState.SLEEPING) }
     var input by remember { mutableStateOf("") }
+    val speaker = remember {
+        Speaker(context) { speaking ->
+            state = if (speaking) JState.SPEAKING else JState.SLEEPING
+        }
+    }
+    var voiceOn by remember { mutableStateOf(speaker.enabled) }
+    var lang by remember { mutableStateOf(speaker.lang) }
     val messages = remember {
         mutableStateListOf(
-            "JARVIS" to "Namaste! Main JARVIS hoon. Neeche command likho, jaise: time kya hai, 5 plus 3, battery, whatsapp kholo. 'help' likho toh poori list milegi."
+            "JARVIS" to "Namaste! Main JARVIS hoon. Ab main bolta bhi hoon. Neeche command likho, jaise: time kya hai, 5 plus 3, battery. Female awaaz ke liye NEXT VOICE dabao. 'help' likho toh poori list milegi."
         )
     }
     val listState = rememberLazyListState()
+
+    DisposableEffect(Unit) {
+        onDispose { speaker.shutdown() }
+    }
 
     fun send() {
         val text = input.trim()
         if (text.isEmpty()) return
         input = ""
         messages.add("YOU" to text)
-        messages.add("JARVIS" to engine.handle(text))
+        val reply = engine.handle(text)
+        messages.add("JARVIS" to reply)
+        speaker.speak(reply)
+    }
+
+    fun sample() {
+        speaker.speak(
+            if (speaker.lang == "hi") "नमस्ते, मैं जार्विस हूँ।" else "Hello, I am Jarvis."
+        )
     }
 
     LaunchedEffect(messages.size) {
@@ -95,22 +130,35 @@ fun JarvisScreen() {
         )
 
         Orb(state) {
-            state = JState.entries[(state.ordinal + 1) % JState.entries.size]
+            messages.add("JARVIS" to "Mic abhi kaam nahi karta, woh Phase 4 mein aayega. Abhi neeche text likho.")
         }
 
         Wave(active = state != JState.SLEEPING, color = state.color)
 
-        Text(
-            "■ STOP",
-            color = Color(0xFFEF5350),
-            fontSize = 14.sp,
-            fontWeight = FontWeight.Bold,
-            modifier = Modifier
-                .padding(vertical = 8.dp)
-                .border(1.dp, Color(0xFFEF5350), RoundedCornerShape(20.dp))
-                .clickable { state = JState.SLEEPING }
-                .padding(horizontal = 20.dp, vertical = 6.dp)
-        )
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp),
+            horizontalArrangement = Arrangement.SpaceEvenly,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            SmallButton("■ STOP", Color(0xFFEF5350)) {
+                speaker.stop()
+                state = JState.SLEEPING
+            }
+            SmallButton(if (voiceOn) "VOICE ON" else "VOICE OFF") {
+                voiceOn = !voiceOn
+                speaker.turnVoice(voiceOn)
+                if (!voiceOn) state = JState.SLEEPING
+            }
+            SmallButton("NEXT VOICE") {
+                messages.add("JARVIS" to speaker.nextVoice())
+                sample()
+            }
+            SmallButton(if (lang == "en") "LANG EN" else "LANG HI") {
+                messages.add("JARVIS" to speaker.toggleLang())
+                lang = speaker.lang
+                sample()
+            }
+        }
 
         LazyColumn(
             state = listState,
