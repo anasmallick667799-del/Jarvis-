@@ -1,8 +1,9 @@
 package com.jarvis.assistant
 
-import android.Manifest
-import android.content.pm.PackageManager
+import android.app.Activity
+import android.content.Intent
 import android.os.Bundle
+import android.speech.RecognizerIntent
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
@@ -26,7 +27,6 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -46,7 +46,6 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.core.content.ContextCompat
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -75,11 +74,9 @@ fun JarvisScreen() {
     val engine = remember { CommandEngine(context.applicationContext) }
     var state by remember { mutableStateOf(JState.SLEEPING) }
     var input by remember { mutableStateOf("") }
-    var heard by remember { mutableStateOf("") }
-    var showRationale by remember { mutableStateOf(false) }
     val messages = remember {
         mutableStateListOf(
-            "JARVIS" to "Namaste! Main JARVIS hoon. Ab MIC dabake bol bhi sakte ho, ya neeche text likho. Jaise: time kya hai, 5 plus 3, battery. 'help' likho toh poori list milegi."
+            "JARVIS" to "Namaste! Main JARVIS hoon. MIC dabake bolo ya neeche text likho. Jaise: time kya hai, 5 plus 3, battery. 'help' likho toh poori list milegi."
         )
     }
     val listState = rememberLazyListState()
@@ -107,57 +104,38 @@ fun JarvisScreen() {
         if (!speaker.enabled || !speaker.isReady) state = JState.SLEEPING
     }
 
-    val voice = remember {
-        VoiceInput(
-            context,
-            { partial -> heard = partial },
-            { text ->
-                heard = ""
+    val speechLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        if (state == JState.LISTENING) state = JState.SLEEPING
+        if (result.resultCode == Activity.RESULT_OK) {
+            val text = result.data
+                ?.getStringArrayListExtra(RecognizerIntent.EXTRA_RESULTS)
+                ?.firstOrNull()
+                ?.trim()
+                .orEmpty()
+            if (text.isNotEmpty()) {
                 process(text)
-            },
-            { err ->
-                heard = ""
-                messages.add("JARVIS" to err)
-                if (state == JState.LISTENING) state = JState.SLEEPING
-            },
-            { listening ->
-                if (listening) {
-                    state = JState.LISTENING
-                } else if (state == JState.LISTENING) {
-                    state = JState.SLEEPING
-                }
+            } else {
+                messages.add("JARVIS" to "Kuch samajh nahi aaya. Dobara bolo.")
             }
-        )
+        }
     }
 
     fun startListening() {
         speaker.stop()
-        heard = ""
-        voice.start(speaker.lang)
-    }
-
-    val permLauncher = rememberLauncherForActivityResult(
-        ActivityResultContracts.RequestPermission()
-    ) { granted ->
-        if (granted) {
-            startListening()
-        } else {
-            messages.add(
-                "JARVIS" to "Mic permission nahi mili. Text se kaam chalta rahega. Baad mein chahiye toh Settings, Apps, JARVIS, Permissions mein Microphone allow karo."
-            )
+        val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
+            putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
+            putExtra(RecognizerIntent.EXTRA_LANGUAGE, if (speaker.lang == "hi") "hi-IN" else "en-US")
+            putExtra(RecognizerIntent.EXTRA_PROMPT, "JARVIS sun raha hai...")
         }
-    }
-
-    fun onMicTap() {
-        if (state == JState.LISTENING) {
-            voice.stop()
+        try {
+            state = JState.LISTENING
+            speechLauncher.launch(intent)
+        } catch (e: Exception) {
             state = JState.SLEEPING
-            return
+            messages.add("JARVIS" to "Voice input dialog nahi khul paaya. Google app install/update karo.")
         }
-        val ok = ContextCompat.checkSelfPermission(
-            context, Manifest.permission.RECORD_AUDIO
-        ) == PackageManager.PERMISSION_GRANTED
-        if (ok) startListening() else showRationale = true
     }
 
     fun send() {
@@ -174,50 +152,11 @@ fun JarvisScreen() {
     }
 
     DisposableEffect(Unit) {
-        onDispose {
-            voice.destroy()
-            speaker.shutdown()
-        }
+        onDispose { speaker.shutdown() }
     }
 
     LaunchedEffect(messages.size) {
         if (messages.isNotEmpty()) listState.animateScrollToItem(messages.size - 1)
-    }
-
-    if (showRationale) {
-        AlertDialog(
-            onDismissRequest = { showRationale = false },
-            containerColor = Color(0xFF0A1B33),
-            title = { Text("Mic permission", color = Color.White) },
-            text = {
-                Text(
-                    "JARVIS ko aapki awaaz sunne ke liye microphone chahiye. Mic sirf tab chalu hota hai jab aap MIC dabate ho (status LISTENING dikhta hai aur upar green dot aata hai). JARVIS recording save nahi karta. Online hone par Google ki speech service awaaz ko text mein badalne ke liye use hoti hai.",
-                    color = Color(0xFFE3F2FD)
-                )
-            },
-            confirmButton = {
-                Text(
-                    "ALLOW",
-                    color = Color(0xFF4FC3F7),
-                    fontWeight = FontWeight.Bold,
-                    modifier = Modifier
-                        .clickable {
-                            showRationale = false
-                            permLauncher.launch(Manifest.permission.RECORD_AUDIO)
-                        }
-                        .padding(12.dp)
-                )
-            },
-            dismissButton = {
-                Text(
-                    "CANCEL",
-                    color = Color(0xFF90A4AE),
-                    modifier = Modifier
-                        .clickable { showRationale = false }
-                        .padding(12.dp)
-                )
-            }
-        )
     }
 
     Column(
@@ -242,7 +181,7 @@ fun JarvisScreen() {
             modifier = Modifier.padding(top = 2.dp)
         )
 
-        Orb(state) { onMicTap() }
+        Orb(state) { startListening() }
 
         Wave(active = state != JState.SLEEPING, color = state.color)
 
@@ -253,8 +192,6 @@ fun JarvisScreen() {
         ) {
             SmallButton("■ STOP", Color(0xFFEF5350)) {
                 speaker.stop()
-                voice.stop()
-                heard = ""
                 state = JState.SLEEPING
             }
             SmallButton(if (voiceOn) "VOICE ON" else "VOICE OFF") {
@@ -271,15 +208,6 @@ fun JarvisScreen() {
                 lang = speaker.lang
                 sample()
             }
-        }
-
-        if (heard.isNotEmpty()) {
-            Text(
-                "Sun raha hoon: $heard",
-                color = Color(0xFF81D4FA),
-                fontSize = 12.sp,
-                modifier = Modifier.padding(bottom = 4.dp)
-            )
         }
 
         LazyColumn(
