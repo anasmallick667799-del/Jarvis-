@@ -70,7 +70,7 @@ class VoiceInput(
         r.setRecognitionListener(listener)
         val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
             putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
-            putExtra(RecognizerIntent.EXTRA_LANGUAGE, if (lang == "hi") "hi-IN" else "en-IN")
+            putExtra(RecognizerIntent.EXTRA_LANGUAGE, if (lang == "hi") "hi-IN" else "en-US")
             putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
             putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 1)
         }
@@ -89,7 +89,7 @@ class VoiceInput(
     }
 
     private fun errorText(code: Int): String = when (code) {
-        1, 2 -> "Internet ki problem hai. Net check karo ya offline language pack download karo."
+        1, 2 -> "Internet ki problem hai (code $code). Net check karo ya offline language pack download karo."
         3 -> "Mic se awaaz nahi aa rahi. Mic check karo."
         4 -> "Speech service mein problem aayi."
         5 -> "Sunne mein problem aayi. Dobara try karo."
