@@ -93,7 +93,7 @@ class AiClient(context: Context) {
                     }
                 }
             } catch (e: Exception) {
-                error = "Internet nahi hai ya Worker tak pahunch nahi paaya."
+                error = "Connection error: " + e.javaClass.simpleName + " " + (e.message ?: "")
             }
             val finalReply = reply
             val finalError = error
