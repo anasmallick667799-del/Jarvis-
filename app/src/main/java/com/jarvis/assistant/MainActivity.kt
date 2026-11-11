@@ -27,6 +27,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -44,8 +45,12 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+
+private const val UNKNOWN_PREFIX = "Yeh command abhi samajh nahi aaya"
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -69,14 +74,43 @@ fun SmallButton(label: String, color: Color = Color(0xFF4FC3F7), onClick: () -> 
 }
 
 @Composable
+fun SetupField(hint: String, value: String, secret: Boolean, onChange: (String) -> Unit) {
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(top = 10.dp)
+            .background(Color(0xFF020814), RoundedCornerShape(12.dp))
+            .padding(12.dp)
+    ) {
+        if (value.isEmpty()) {
+            Text(hint, color = Color(0xFF607D8B), fontSize = 14.sp)
+        }
+        BasicTextField(
+            value = value,
+            onValueChange = onChange,
+            singleLine = true,
+            textStyle = TextStyle(color = Color(0xFFE3F2FD), fontSize = 14.sp),
+            cursorBrush = SolidColor(Color(0xFF4FC3F7)),
+            visualTransformation = if (secret) PasswordVisualTransformation() else VisualTransformation.None,
+            modifier = Modifier.fillMaxWidth()
+        )
+    }
+}
+
+@Composable
 fun JarvisScreen() {
     val context = LocalContext.current
     val engine = remember { CommandEngine(context.applicationContext) }
+    val ai = remember { AiClient(context.applicationContext) }
     var state by remember { mutableStateOf(JState.SLEEPING) }
     var input by remember { mutableStateOf("") }
+    var aiOn by remember { mutableStateOf(ai.isConfigured()) }
+    var showSetup by remember { mutableStateOf(false) }
+    var urlInput by remember { mutableStateOf(ai.url) }
+    var tokenInput by remember { mutableStateOf(ai.token) }
     val messages = remember {
         mutableStateListOf(
-            "JARVIS" to "Namaste! Main JARVIS hoon. MIC dabake bolo ya neeche text likho. Jaise: time kya hai, 5 plus 3, battery. 'help' likho toh poori list milegi."
+            "JARVIS" to "Namaste! Main JARVIS hoon. MIC dabake bolo ya text likho. Time, battery, calculator, notes, app kholna offline chalta hai. Baaki sawaalon ke liye AI SETUP karo. 'help' likho toh list milegi."
         )
     }
     val listState = rememberLazyListState()
@@ -95,13 +129,27 @@ fun JarvisScreen() {
     var voiceOn by remember { mutableStateOf(speaker.enabled) }
     var lang by remember { mutableStateOf(speaker.lang) }
 
+    fun reply(r: String) {
+        messages.add("JARVIS" to r)
+        speaker.speak(r)
+        if (!speaker.enabled || !speaker.isReady) state = JState.SLEEPING
+    }
+
     fun process(text: String) {
         messages.add("YOU" to text)
         state = JState.THINKING
-        val reply = engine.handle(text)
-        messages.add("JARVIS" to reply)
-        speaker.speak(reply)
-        if (!speaker.enabled || !speaker.isReady) state = JState.SLEEPING
+        val forceAi = text.lowercase().startsWith("ai ")
+        val offline = if (forceAi) null else engine.handle(text).takeIf { !it.startsWith(UNKNOWN_PREFIX) }
+        if (offline != null) {
+            reply(offline)
+            return
+        }
+        if (!ai.isConfigured()) {
+            reply("AI abhi set nahi hai. Upar AI SETUP dabake Worker URL aur token daalo.")
+            return
+        }
+        val question = if (forceAi) text.substring(3).trim() else text
+        ai.ask(question) { answer -> reply(answer) }
     }
 
     val speechLauncher = rememberLauncherForActivityResult(
@@ -159,6 +207,54 @@ fun JarvisScreen() {
         if (messages.isNotEmpty()) listState.animateScrollToItem(messages.size - 1)
     }
 
+    if (showSetup) {
+        AlertDialog(
+            onDismissRequest = { showSetup = false },
+            containerColor = Color(0xFF0A1B33),
+            title = { Text("AI Setup", color = Color.White) },
+            text = {
+                Column {
+                    Text(
+                        "Cloudflare Worker ka URL aur APP_TOKEN daalo. Yeh sirf is phone mein save honge.",
+                        color = Color(0xFFE3F2FD),
+                        fontSize = 13.sp
+                    )
+                    SetupField("Worker URL (https://...)", urlInput, false) { urlInput = it }
+                    SetupField("APP_TOKEN", tokenInput, true) { tokenInput = it }
+                }
+            },
+            confirmButton = {
+                Text(
+                    "SAVE",
+                    color = Color(0xFF4FC3F7),
+                    fontWeight = FontWeight.Bold,
+                    modifier = Modifier
+                        .clickable {
+                            ai.save(urlInput, tokenInput)
+                            aiOn = ai.isConfigured()
+                            showSetup = false
+                            val msg = if (aiOn) {
+                                "AI setup save ho gaya. Ab koi bhi sawaal pucho, ya 'ai ...' se shuru karo."
+                            } else {
+                                "URL ya token khaali hai, AI abhi off hai."
+                            }
+                            messages.add("JARVIS" to msg)
+                        }
+                        .padding(12.dp)
+                )
+            },
+            dismissButton = {
+                Text(
+                    "CANCEL",
+                    color = Color(0xFF90A4AE),
+                    modifier = Modifier
+                        .clickable { showSetup = false }
+                        .padding(12.dp)
+                )
+            }
+        )
+    }
+
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -174,12 +270,17 @@ fun JarvisScreen() {
             fontSize = 24.sp,
             fontWeight = FontWeight.Bold
         )
-        Text(
-            state.label,
-            color = state.color,
-            fontSize = 13.sp,
-            modifier = Modifier.padding(top = 2.dp)
-        )
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            Text(state.label, color = state.color, fontSize = 13.sp)
+            SmallButton(if (aiOn) "AI: ON" else "AI SETUP") {
+                urlInput = ai.url
+                tokenInput = ai.token
+                showSetup = true
+            }
+        }
 
         Orb(state) { startListening() }
 
@@ -247,7 +348,7 @@ fun JarvisScreen() {
                     .padding(horizontal = 16.dp, vertical = 12.dp)
             ) {
                 if (input.isEmpty()) {
-                    Text("Command likho...", color = Color(0xFF607D8B), fontSize = 15.sp)
+                    Text("Command ya sawaal likho...", color = Color(0xFF607D8B), fontSize = 15.sp)
                 }
                 BasicTextField(
                     value = input,
