@@ -52,6 +52,15 @@ import androidx.compose.ui.unit.sp
 
 private const val UNKNOWN_PREFIX = "Yeh command abhi samajh nahi aaya"
 
+private val PERSONAL_WORDS = setOf(
+    "mera", "meri", "mere", "mujhe", "main", "mai", "my", "i", "i'm", "hum", "humare", "hamara"
+)
+
+private fun looksPersonal(t: String): Boolean {
+    val words = t.lowercase().split(Regex("[^a-z']+"))
+    return words.any { it in PERSONAL_WORDS }
+}
+
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -102,16 +111,25 @@ fun JarvisScreen() {
     val context = LocalContext.current
     val engine = remember { CommandEngine(context.applicationContext) }
     val ai = remember { AiClient(context.applicationContext) }
+    val memory = remember { MemoryStore(context.applicationContext) }
+    val chat = remember { ChatStore(context.applicationContext) }
     var state by remember { mutableStateOf(JState.SLEEPING) }
     var input by remember { mutableStateOf("") }
     var aiOn by remember { mutableStateOf(ai.isConfigured()) }
     var showSetup by remember { mutableStateOf(false) }
+    var pendingFact by remember { mutableStateOf<String?>(null) }
+    var pendingFromAi by remember { mutableStateOf(false) }
     var urlInput by remember { mutableStateOf(ai.url) }
     var tokenInput by remember { mutableStateOf(ai.token) }
     val messages = remember {
-        mutableStateListOf(
-            "JARVIS" to "Namaste! Main JARVIS hoon. MIC dabake bolo ya text likho. Time, battery, calculator, notes, app kholna offline chalta hai. Baaki sawaalon ke liye AI SETUP karo. 'help' likho toh list milegi."
-        )
+        val saved = chat.load()
+        mutableStateListOf<Pair<String, String>>().apply {
+            if (saved.isEmpty()) {
+                add("JARVIS" to "Namaste! Main JARVIS hoon. MIC dabake bolo ya text likho. Time, battery, calculator, notes, app kholna offline chalta hai. 'yaad rakho ki ...' se meri baatein yaad rakh sakta hoon. Baaki sawaalon ke liye AI SETUP karo. 'help' likho toh list milegi.")
+            } else {
+                addAll(saved)
+            }
+        }
     }
     val listState = rememberLazyListState()
 
@@ -138,7 +156,27 @@ fun JarvisScreen() {
     fun process(text: String) {
         messages.add("YOU" to text)
         state = JState.THINKING
-        val forceAi = text.lowercase().startsWith("ai ")
+
+        val low = text.lowercase()
+        if (low.contains("chat saaf") || low.contains("clear chat") || low.contains("chat clear") || low.contains("chat delete")) {
+            messages.clear()
+            chat.clear()
+            ai.clearHistory()
+            reply("Chat saaf kar di. Yaadein (memory) waise hi hain.")
+            return
+        }
+
+        val mem = memory.handle(text)
+        if (mem != null) {
+            if (mem.pendingFact != null) {
+                pendingFromAi = false
+                pendingFact = mem.pendingFact
+            }
+            reply(mem.reply)
+            return
+        }
+
+        val forceAi = low.startsWith("ai ")
         val offline = if (forceAi) null else engine.handle(text).takeIf { !it.startsWith(UNKNOWN_PREFIX) }
         if (offline != null) {
             reply(offline)
@@ -149,7 +187,21 @@ fun JarvisScreen() {
             return
         }
         val question = if (forceAi) text.substring(3).trim() else text
-        ai.ask(question) { answer -> reply(answer) }
+        ai.ask(question, memory.all()) { answer, ok ->
+            reply(answer)
+            if (ok && question.length in 8..300 && looksPersonal(question)) {
+                ai.suggestFact(question) { fact ->
+                    if (fact != null &&
+                        pendingFact == null &&
+                        !memory.isSensitive(fact) &&
+                        memory.all().none { it.equals(fact, ignoreCase = true) }
+                    ) {
+                        pendingFromAi = true
+                        pendingFact = fact
+                    }
+                }
+            }
+        }
     }
 
     val speechLauncher = rememberLauncherForActivityResult(
@@ -204,7 +256,61 @@ fun JarvisScreen() {
     }
 
     LaunchedEffect(messages.size) {
+        chat.save(messages.toList())
         if (messages.isNotEmpty()) listState.animateScrollToItem(messages.size - 1)
+    }
+
+    val pf = pendingFact
+    if (pf != null) {
+        AlertDialog(
+            onDismissRequest = { pendingFact = null },
+            containerColor = Color(0xFF0A1B33),
+            title = {
+                Text(
+                    if (pendingFromAi) "AI ka suggestion: yaad rakhun?" else "Yaad rakhun?",
+                    color = Color.White
+                )
+            },
+            text = {
+                Text(
+                    "\"$pf\"\n\nYeh sirf is phone mein save hoga. Jab aap AI se sawaal poochoge, tab yeh baat AI (Google) ko bhi bheji jayegi. Password, OTP ya bank jaisi private cheezein save mat karo.",
+                    color = Color(0xFFE3F2FD),
+                    fontSize = 13.sp
+                )
+            },
+            confirmButton = {
+                Text(
+                    "YES, YAAD RAKHO",
+                    color = Color(0xFF4FC3F7),
+                    fontWeight = FontWeight.Bold,
+                    modifier = Modifier
+                        .clickable {
+                            val ok = memory.add(pf)
+                            pendingFact = null
+                            reply(
+                                if (ok) {
+                                    "Theek hai, yaad rakh liya: $pf"
+                                } else {
+                                    "Yeh pehle se yaad hai ya memory bhar gayi hai (30 yaadein)."
+                                }
+                            )
+                        }
+                        .padding(12.dp)
+                )
+            },
+            dismissButton = {
+                Text(
+                    "NO",
+                    color = Color(0xFF90A4AE),
+                    modifier = Modifier
+                        .clickable {
+                            pendingFact = null
+                            messages.add("JARVIS" to "Theek hai, yaad nahi rakha.")
+                        }
+                        .padding(12.dp)
+                )
+            }
+        )
     }
 
     if (showSetup) {
