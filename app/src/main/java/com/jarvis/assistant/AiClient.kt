@@ -13,7 +13,7 @@ class AiClient(context: Context) {
     private val prefs = context.applicationContext
         .getSharedPreferences("jarvis_ai", Context.MODE_PRIVATE)
     private val main = Handler(Looper.getMainLooper())
-    private val history = mutableListOf<Pair<String, String>>()
+    private val history: MutableList<Pair<String, String>> = loadHistory()
 
     var url: String = prefs.getString("url", "") ?: ""
         private set
@@ -28,12 +28,34 @@ class AiClient(context: Context) {
         prefs.edit().putString("url", url).putString("token", token).apply()
     }
 
-    fun ask(text: String, callback: (String) -> Unit) {
-        val msgs = JSONArray()
-        for ((role, t) in history) {
-            msgs.put(JSONObject().put("role", role).put("text", t))
+    private fun loadHistory(): MutableList<Pair<String, String>> {
+        val out = mutableListOf<Pair<String, String>>()
+        try {
+            val arr = JSONArray(prefs.getString("history", "[]") ?: "[]")
+            for (i in 0 until arr.length()) {
+                val o = arr.getJSONObject(i)
+                out.add(o.getString("r") to o.getString("t"))
+            }
+        } catch (e: Exception) {
+            // kharab data ho toh khaali history
         }
-        msgs.put(JSONObject().put("role", "user").put("text", text))
+        return out
+    }
+
+    private fun saveHistory() {
+        val arr = JSONArray()
+        for ((r, t) in history) {
+            arr.put(JSONObject().put("r", r).put("t", t))
+        }
+        prefs.edit().putString("history", arr.toString()).apply()
+    }
+
+    fun clearHistory() {
+        history.clear()
+        saveHistory()
+    }
+
+    private fun post(msgs: JSONArray, done: (String?, String?) -> Unit) {
         val body = JSONObject().put("messages", msgs).toString()
         val endpoint = url
         val tok = token
@@ -75,16 +97,51 @@ class AiClient(context: Context) {
             }
             val finalReply = reply
             val finalError = error
-            main.post {
-                if (finalReply != null) {
-                    history.add("user" to text)
-                    history.add("model" to finalReply)
-                    while (history.size > 12) history.removeAt(0)
-                    callback(finalReply)
-                } else {
-                    callback("AI se jawab nahi mila: " + (finalError ?: "pata nahi kyun"))
-                }
-            }
+            main.post { done(finalReply, finalError) }
         }.start()
+    }
+
+    fun ask(text: String, facts: List<String>, callback: (String, Boolean) -> Unit) {
+        val sendText = if (facts.isEmpty()) {
+            text
+        } else {
+            val factText = facts.joinToString("\n") { "- $it" }.take(1200)
+            text + "\n\nUser ke baare mein saved baatein (sirf zaroorat padne par use karo, bina poochhe unka zikr mat karo):\n" + factText
+        }
+
+        val msgs = JSONArray()
+        for ((role, t) in history) {
+            msgs.put(JSONObject().put("role", role).put("text", t))
+        }
+        msgs.put(JSONObject().put("role", "user").put("text", sendText))
+
+        post(msgs) { r, e ->
+            if (r != null) {
+                history.add("user" to text)
+                history.add("model" to r)
+                while (history.size > 12) history.removeAt(0)
+                saveHistory()
+                callback(r, true)
+            } else {
+                callback("AI se jawab nahi mila: " + (e ?: "pata nahi kyun"), false)
+            }
+        }
+    }
+
+    fun suggestFact(userText: String, callback: (String?) -> Unit) {
+        val prompt = "Neeche user ka message hai. Agar usme user ke baare mein koi lambe samay tak kaam aane wali personal baat hai " +
+            "(jaise naam, pasand ya napasand, kaam ya padhai, shauk, routine), toh use ek chhoti line mein likho, jaise 'User ka naam Rahul hai'. " +
+            "Agar aisi koi baat nahi hai, ya baat private ya sensitive hai (password, OTP, bank, health, address), ya sirf ek-baar ka sawaal hai, " +
+            "toh sirf NONE likho. Aur kuch bhi mat likho.\n\nUser ka message: \"" + userText.take(300) + "\""
+        val msgs = JSONArray().put(JSONObject().put("role", "user").put("text", prompt))
+        post(msgs) { r, _ -> callback(parseFact(r)) }
+    }
+
+    private fun parseFact(r: String?): String? {
+        if (r == null) return null
+        val t = r.trim().trim('"', '\'', '.', ' ').trim()
+        if (t.isEmpty() || t.length > 120 || t.contains('\n')) return null
+        if (t.contains("NONE", ignoreCase = true)) return null
+        return t
     }
 }
