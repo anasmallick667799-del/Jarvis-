@@ -199,7 +199,7 @@ fun JarvisScreen() {
                 speaker.turnVoice(voiceOn)
                 if (!voiceOn && state == JState.SPEAKING) state = JState.SLEEPING
             }
-            SmallButton("NEXT VOICE") {
+            SmallButton("NEXT") {
                 messages.add("JARVIS" to speaker.nextVoice())
                 sample()
             }
