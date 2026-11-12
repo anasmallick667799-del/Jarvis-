@@ -23,6 +23,10 @@ class Speaker(
         private set
     var lang: String = prefs.getString("lang", "en") ?: "en"
         private set
+    var rate: Float = prefs.getFloat("rate", 1.0f)
+        private set
+    var pitch: Float = prefs.getFloat("pitch", 1.0f)
+        private set
 
     private val listener = object : UtteranceProgressListener() {
         override fun onStart(utteranceId: String?) {
@@ -87,6 +91,12 @@ class Speaker(
         }
     }
 
+    fun setVoiceStyle(newRate: Float, newPitch: Float) {
+        rate = newRate
+        pitch = newPitch
+        prefs.edit().putFloat("rate", rate).putFloat("pitch", pitch).apply()
+    }
+
     fun speak(text: String) {
         if (!enabled || !isReady) return
         val clean = text
@@ -97,6 +107,8 @@ class Speaker(
             .replace(" / ", " divided by ")
             .replace(" = ", " equals ")
             .replace("\n", ". ")
+        tts?.setSpeechRate(rate)
+        tts?.setPitch(pitch)
         tts?.speak(clean, TextToSpeech.QUEUE_FLUSH, null, "jarvis_utt")
     }
 
@@ -124,7 +136,7 @@ class Speaker(
         val next = list[(idx + 1) % list.size]
         prefs.edit().putString("voice_$lang", next.name).apply()
         tts?.setVoice(next)
-        return "Voice ${list.indexOf(next) + 1}/${list.size} (${next.name}). Female nahi lagi toh dobara NEXT VOICE dabao."
+        return "Voice ${list.indexOf(next) + 1}/${list.size} (${next.name}). Female nahi lagi toh dobara NEXT dabao."
     }
 
     fun toggleLang(): String {
@@ -137,7 +149,7 @@ class Speaker(
         return if (count == 0) {
             "$name voice nahi mili. Settings mein Text-to-speech se $name voice data download karo."
         } else {
-            "Awaaz ki language: $name ($count voices mili). Female voice ke liye NEXT VOICE dabao."
+            "Awaaz ki language: $name ($count voices mili). Female voice ke liye NEXT dabao."
         }
     }
 
