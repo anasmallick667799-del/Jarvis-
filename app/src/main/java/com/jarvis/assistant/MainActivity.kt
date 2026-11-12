@@ -52,10 +52,10 @@ import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
-import androidx.lifecycle.DefaultLifecycleObserver
-import androidx.lifecycle.LifecycleOwner
 
 private const val UNKNOWN_PREFIX = "Yeh command abhi samajh nahi aaya"
+private val ON_COLOR = Color(0xFF4FC3F7)
+private val OFF_COLOR = Color(0xFF546E7A)
 
 private val PERSONAL_WORDS = setOf(
     "mera", "meri", "mere", "mujhe", "main", "mai", "my", "i", "i'm", "hum", "humare", "hamara"
@@ -114,32 +114,30 @@ fun SetupField(hint: String, value: String, secret: Boolean, onChange: (String) 
 @Composable
 fun JarvisScreen() {
     val context = LocalContext.current
-    val activity = context as ComponentActivity
     val engine = remember { CommandEngine(context.applicationContext) }
     val ai = remember { AiClient(context.applicationContext) }
     val memory = remember { MemoryStore(context.applicationContext) }
     val chat = remember { ChatStore(context.applicationContext) }
-    val wake = remember { WakeWord(context.applicationContext) }
+    val settings = remember { AppSettings(context.applicationContext) }
+    val weather = remember { Weather(context.applicationContext) }
+    val contacts = remember { ContactsHelper(context.applicationContext) }
     var state by remember { mutableStateOf(JState.SLEEPING) }
     var input by remember { mutableStateOf("") }
     var aiOn by remember { mutableStateOf(ai.isConfigured()) }
     var showSetup by remember { mutableStateOf(false) }
+    var showSettings by remember { mutableStateOf(false) }
+    var showContactsWhy by remember { mutableStateOf(false) }
+    var pendingCallName by remember { mutableStateOf<String?>(null) }
     var pendingFact by remember { mutableStateOf<String?>(null) }
     var pendingFromAi by remember { mutableStateOf(false) }
     var urlInput by remember { mutableStateOf(ai.url) }
     var tokenInput by remember { mutableStateOf(ai.token) }
-    var wakeOn by remember { mutableStateOf(false) }
-    var appVisible by remember { mutableStateOf(true) }
-    var speakingNow by remember { mutableStateOf(false) }
-    var wakeSignal by remember { mutableStateOf(0) }
-    var showWakeSetup by remember { mutableStateOf(false) }
-    var showMicWhy by remember { mutableStateOf(false) }
-    var keyInput by remember { mutableStateOf("") }
+    var suggestOn by remember { mutableStateOf(settings.suggestions) }
     val messages = remember {
         val saved = chat.load()
         mutableStateListOf<Pair<String, String>>().apply {
             if (saved.isEmpty()) {
-                add("JARVIS" to "Namaste! Main JARVIS hoon. MIC dabake bolo ya text likho. Time, battery, calculator, notes, app kholna offline chalta hai. 'yaad rakho ki ...' se meri baatein yaad rakh sakta hoon. Baaki sawaalon ke liye AI SETUP karo. 'help' likho toh list milegi.")
+                add("JARVIS" to "Namaste! Main JARVIS hoon. MIC dabake bolo ya text likho. Time, battery, calculator, notes, alarm, timer, torch, mausam, joke, naam se call, sab try karo. 'help' likho toh list milegi.")
             } else {
                 addAll(saved)
             }
@@ -149,7 +147,6 @@ fun JarvisScreen() {
 
     val speaker = remember {
         Speaker(context) { speaking ->
-            speakingNow = speaking
             state = if (speaking) {
                 JState.SPEAKING
             } else if (state == JState.SPEAKING || state == JState.THINKING) {
@@ -161,12 +158,18 @@ fun JarvisScreen() {
     }
     var voiceOn by remember { mutableStateOf(speaker.enabled) }
     var lang by remember { mutableStateOf(speaker.lang) }
+    var rate by remember { mutableStateOf(speaker.rate) }
+    var pitch by remember { mutableStateOf(speaker.pitch) }
 
     fun reply(r: String) {
         messages.add("JARVIS" to r)
         speaker.speak(r)
         if (!speaker.enabled || !speaker.isReady) state = JState.SLEEPING
     }
+
+    fun hasContacts(): Boolean = ContextCompat.checkSelfPermission(
+        context, Manifest.permission.READ_CONTACTS
+    ) == PackageManager.PERMISSION_GRANTED
 
     fun process(text: String) {
         messages.add("YOU" to text)
@@ -180,12 +183,6 @@ fun JarvisScreen() {
             reply("Chat saaf kar di. Yaadein (memory) waise hi hain.")
             return
         }
-        if (low.contains("wake key")) {
-            keyInput = wake.accessKey
-            showWakeSetup = true
-            reply("Wake word ki AccessKey badalne ke liye dialog khol diya.")
-            return
-        }
 
         val mem = memory.handle(text)
         if (mem != null) {
@@ -194,6 +191,41 @@ fun JarvisScreen() {
                 pendingFact = mem.pendingFact
             }
             reply(mem.reply)
+            return
+        }
+
+        val setCity = weather.setCityCommand(text)
+        if (setCity != null) {
+            reply(setCity)
+            return
+        }
+
+        val wq = weather.parse(text)
+        if (wq != null) {
+            val city = if (wq.isBlank()) weather.savedCity() else wq
+            if (city.isBlank()) {
+                reply("Kis shehar ka mausam? Jaise: mausam Delhi. Ya pehle bolo: mera shehar Delhi hai")
+            } else {
+                weather.fetch(city) { answer -> reply(answer) }
+            }
+            return
+        }
+
+        val joke = Jokes.match(low)
+        if (joke != null) {
+            reply(joke)
+            return
+        }
+
+        val callTarget = contacts.callTarget(text)
+        if (callTarget != null) {
+            if (hasContacts()) {
+                reply(contacts.dial(callTarget))
+            } else {
+                pendingCallName = callTarget
+                showContactsWhy = true
+                reply("Naam se call ke liye contacts ki permission chahiye. Dialog mein ALLOW dabao.")
+            }
             return
         }
 
@@ -210,7 +242,7 @@ fun JarvisScreen() {
         val question = if (forceAi) text.substring(3).trim() else text
         ai.ask(question, memory.all()) { answer, ok ->
             reply(answer)
-            if (ok && question.length in 8..300 && looksPersonal(question)) {
+            if (ok && suggestOn && question.length in 8..300 && looksPersonal(question)) {
                 ai.suggestFact(question) { fact ->
                     if (fact != null &&
                         pendingFact == null &&
@@ -243,8 +275,19 @@ fun JarvisScreen() {
         }
     }
 
+    val contactsLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        val name = pendingCallName
+        pendingCallName = null
+        if (granted && name != null) {
+            reply(contacts.dial(name))
+        } else {
+            reply("Contacts permission nahi mili, isliye naam se call nahi laga sakta. Number ke saath bolo: call 9876543210")
+        }
+    }
+
     fun startListening() {
-        wake.stop()
         speaker.stop()
         val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
             putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
@@ -257,39 +300,6 @@ fun JarvisScreen() {
         } catch (e: Exception) {
             state = JState.SLEEPING
             messages.add("JARVIS" to "Voice input dialog nahi khul paaya. Google app install/update karo.")
-        }
-    }
-
-    val micLauncher = rememberLauncherForActivityResult(
-        ActivityResultContracts.RequestPermission()
-    ) { granted ->
-        if (granted) {
-            wakeOn = true
-            messages.add("JARVIS" to "Wake word chalu. Ab 'Jarvis' bolo.")
-        } else {
-            messages.add("JARVIS" to "Mic permission nahi mili, isliye wake word chalu nahi hua. MIC button abhi bhi kaam karega.")
-        }
-    }
-
-    fun onWakeTap() {
-        if (wakeOn) {
-            wakeOn = false
-            messages.add("JARVIS" to "Wake word band kar diya.")
-            return
-        }
-        if (!wake.hasKey()) {
-            keyInput = ""
-            showWakeSetup = true
-            return
-        }
-        val ok = ContextCompat.checkSelfPermission(
-            context, Manifest.permission.RECORD_AUDIO
-        ) == PackageManager.PERMISSION_GRANTED
-        if (ok) {
-            wakeOn = true
-            messages.add("JARVIS" to "Wake word chalu. Ab 'Jarvis' bolo.")
-        } else {
-            showMicWhy = true
         }
     }
 
@@ -307,39 +317,7 @@ fun JarvisScreen() {
     }
 
     DisposableEffect(Unit) {
-        val obs = object : DefaultLifecycleObserver {
-            override fun onStart(owner: LifecycleOwner) {
-                appVisible = true
-            }
-
-            override fun onStop(owner: LifecycleOwner) {
-                appVisible = false
-            }
-        }
-        activity.lifecycle.addObserver(obs)
-        onDispose {
-            activity.lifecycle.removeObserver(obs)
-            wake.stop()
-            speaker.shutdown()
-        }
-    }
-
-    LaunchedEffect(wakeOn, appVisible, speakingNow, state) {
-        val should = wakeOn && appVisible && !speakingNow &&
-            state != JState.LISTENING && state != JState.THINKING
-        if (should) {
-            val err = wake.start { wakeSignal += 1 }
-            if (err != null) {
-                wakeOn = false
-                messages.add("JARVIS" to err)
-            }
-        } else {
-            wake.stop()
-        }
-    }
-
-    LaunchedEffect(wakeSignal) {
-        if (wakeSignal > 0 && state == JState.SLEEPING) startListening()
+        onDispose { speaker.shutdown() }
     }
 
     LaunchedEffect(messages.size) {
@@ -347,14 +325,17 @@ fun JarvisScreen() {
         if (messages.isNotEmpty()) listState.animateScrollToItem(messages.size - 1)
     }
 
-    if (showMicWhy) {
+    if (showContactsWhy) {
         AlertDialog(
-            onDismissRequest = { showMicWhy = false },
+            onDismissRequest = {
+                showContactsWhy = false
+                pendingCallName = null
+            },
             containerColor = Color(0xFF0A1B33),
-            title = { Text("Mic permission", color = Color.White) },
+            title = { Text("Contacts permission", color = Color.White) },
             text = {
                 Text(
-                    "Wake word ke liye JARVIS ko microphone chahiye. Mic sirf tab chalu rehta hai jab WAKE: ON ho aur app khuli ho. Us waqt upar green dot aur status mein SAY 'JARVIS' dikhega. Wake word phone ke andar hi pehchana jata hai, recording save nahi hoti.",
+                    "Naam se call lagane ke liye JARVIS ko aapke contacts padhne ki permission chahiye. Yeh sirf tab chalta hai jab aap 'X ko call karo' bolte ho. Contacts phone se bahar nahi jaate aur AI ko nahi bheje jaate. Call ka green button aapko khud dabana hoga.",
                     color = Color(0xFFE3F2FD),
                     fontSize = 13.sp
                 )
@@ -366,8 +347,8 @@ fun JarvisScreen() {
                     fontWeight = FontWeight.Bold,
                     modifier = Modifier
                         .clickable {
-                            showMicWhy = false
-                            micLauncher.launch(Manifest.permission.RECORD_AUDIO)
+                            showContactsWhy = false
+                            contactsLauncher.launch(Manifest.permission.READ_CONTACTS)
                         }
                         .padding(12.dp)
                 )
@@ -377,53 +358,96 @@ fun JarvisScreen() {
                     "CANCEL",
                     color = Color(0xFF90A4AE),
                     modifier = Modifier
-                        .clickable { showMicWhy = false }
+                        .clickable {
+                            showContactsWhy = false
+                            pendingCallName = null
+                        }
                         .padding(12.dp)
                 )
             }
         )
     }
 
-    if (showWakeSetup) {
+    if (showSettings) {
         AlertDialog(
-            onDismissRequest = { showWakeSetup = false },
+            onDismissRequest = { showSettings = false },
             containerColor = Color(0xFF0A1B33),
-            title = { Text("Wake word setup", color = Color.White) },
+            title = { Text("Settings", color = Color.White) },
             text = {
                 Column {
-                    Text(
-                        "console.picovoice.ai se free AccessKey lekar yahan paste karo. Yeh sirf is phone mein save hogi. Pehchaan ke liye internet chahiye ho sakta hai.",
-                        color = Color(0xFFE3F2FD),
-                        fontSize = 13.sp
-                    )
-                    SetupField("Picovoice AccessKey", keyInput, true) { keyInput = it }
+                    Text("Awaaz ki speed", color = Color(0xFFE3F2FD), fontSize = 13.sp)
+                    Row(
+                        modifier = Modifier.padding(top = 6.dp, bottom = 12.dp),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        SmallButton("SLOW", if (rate == 0.8f) ON_COLOR else OFF_COLOR) {
+                            rate = 0.8f
+                            speaker.setVoiceStyle(rate, pitch)
+                            sample()
+                        }
+                        SmallButton("NORMAL", if (rate == 1.0f) ON_COLOR else OFF_COLOR) {
+                            rate = 1.0f
+                            speaker.setVoiceStyle(rate, pitch)
+                            sample()
+                        }
+                        SmallButton("FAST", if (rate == 1.3f) ON_COLOR else OFF_COLOR) {
+                            rate = 1.3f
+                            speaker.setVoiceStyle(rate, pitch)
+                            sample()
+                        }
+                    }
+                    Text("Awaaz ka pitch", color = Color(0xFFE3F2FD), fontSize = 13.sp)
+                    Row(
+                        modifier = Modifier.padding(top = 6.dp, bottom = 12.dp),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        SmallButton("LOW", if (pitch == 0.85f) ON_COLOR else OFF_COLOR) {
+                            pitch = 0.85f
+                            speaker.setVoiceStyle(rate, pitch)
+                            sample()
+                        }
+                        SmallButton("NORMAL", if (pitch == 1.0f) ON_COLOR else OFF_COLOR) {
+                            pitch = 1.0f
+                            speaker.setVoiceStyle(rate, pitch)
+                            sample()
+                        }
+                        SmallButton("HIGH", if (pitch == 1.2f) ON_COLOR else OFF_COLOR) {
+                            pitch = 1.2f
+                            speaker.setVoiceStyle(rate, pitch)
+                            sample()
+                        }
+                    }
+                    Text("AI se yaad rakhne ke suggestions", color = Color(0xFFE3F2FD), fontSize = 13.sp)
+                    Row(modifier = Modifier.padding(top = 6.dp, bottom = 12.dp)) {
+                        SmallButton(
+                            if (suggestOn) "SUGGESTIONS: ON" else "SUGGESTIONS: OFF",
+                            if (suggestOn) ON_COLOR else OFF_COLOR
+                        ) {
+                            suggestOn = !suggestOn
+                            settings.suggestions = suggestOn
+                        }
+                    }
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        SmallButton("CLEAR CHAT", Color(0xFFEF5350)) {
+                            messages.clear()
+                            chat.clear()
+                            ai.clearHistory()
+                            messages.add("JARVIS" to "Chat saaf kar di. Yaadein (memory) waise hi hain.")
+                        }
+                        SmallButton("CLEAR MEMORY", Color(0xFFEF5350)) {
+                            memory.clear()
+                            messages.add("JARVIS" to "Saari yaadein mita di.")
+                        }
+                    }
                 }
             },
             confirmButton = {
                 Text(
-                    "SAVE",
+                    "CLOSE",
                     color = Color(0xFF4FC3F7),
                     fontWeight = FontWeight.Bold,
                     modifier = Modifier
-                        .clickable {
-                            wake.saveKey(keyInput)
-                            showWakeSetup = false
-                            wakeOn = false
-                            if (wake.hasKey()) {
-                                onWakeTap()
-                            } else {
-                                messages.add("JARVIS" to "AccessKey khaali hai, wake word off hai.")
-                            }
-                        }
-                        .padding(12.dp)
-                )
-            },
-            dismissButton = {
-                Text(
-                    "CANCEL",
-                    color = Color(0xFF90A4AE),
-                    modifier = Modifier
-                        .clickable { showWakeSetup = false }
+                        .clickable { showSettings = false }
                         .padding(12.dp)
                 )
             }
@@ -531,8 +555,6 @@ fun JarvisScreen() {
         )
     }
 
-    val shownLabel = if (state == JState.SLEEPING && wakeOn) "SAY 'JARVIS'" else state.label
-
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -552,13 +574,13 @@ fun JarvisScreen() {
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(10.dp)
         ) {
-            Text(shownLabel, color = state.color, fontSize = 13.sp)
+            Text(state.label, color = state.color, fontSize = 13.sp)
             SmallButton(if (aiOn) "AI: ON" else "AI SETUP") {
                 urlInput = ai.url
                 tokenInput = ai.token
                 showSetup = true
             }
-            SmallButton(if (wakeOn) "WAKE: ON" else "WAKE: OFF") { onWakeTap() }
+            SmallButton("SETTINGS") { showSettings = true }
         }
 
         Orb(state) { startListening() }
