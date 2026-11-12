@@ -11,12 +11,13 @@ import java.util.Locale
 class CommandEngine(private val context: Context) {
 
     private val notes = NotesStore(context)
-
+private val phone = PhoneActions(context)
     fun handle(input: String): String {
         val original = input.trim()
         val text = original.lowercase(Locale.ROOT)
         if (text.isEmpty()) return "Kuch likho toh sahi."
-        return helpReply(text)
+                return phone.handle(original)
+            ?: helpReply(text)
             ?: notesReply(original, text)
             ?: openAppReply(text)
             ?: batteryReply(text)
