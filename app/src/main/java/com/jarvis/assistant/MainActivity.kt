@@ -215,7 +215,9 @@ fun JarvisScreen(listenSignal: androidx.compose.runtime.MutableState<Int>) {
         chat.save(messages.toList())
         if (messages.isNotEmpty()) listState.animateScrollToItem(messages.size - 1)
     }
-
+    LaunchedEffect(listenSignal.value) {
+        if (listenSignal.value > 0) startListening()
+    }
     if (showContactsWhy) {
         ContactsWhyDialog(
             onAllow = {
