@@ -37,14 +37,31 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 
 class MainActivity : ComponentActivity() {
+
+    private val listenSignal = mutableStateOf(0)
+
+    private fun wantsListen(i: Intent?): Boolean =
+        i?.extras?.get("auto_listen")?.toString() == "true"
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        setContent { JarvisScreen() }
+        if (savedInstanceState == null && wantsListen(intent)) {
+            listenSignal.value = listenSignal.value + 1
+        }
+        setContent { JarvisScreen(listenSignal) }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        if (wantsListen(intent)) {
+            listenSignal.value = listenSignal.value + 1
+        }
     }
 }
 
 @Composable
-fun JarvisScreen() {
+fun JarvisScreen(listenSignal: androidx.compose.runtime.MutableState<Int>) {
     val context = LocalContext.current
     val chat = remember { ChatStore(context.applicationContext) }
     var state by remember { mutableStateOf(JState.SLEEPING) }
