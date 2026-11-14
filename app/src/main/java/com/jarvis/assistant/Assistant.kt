@@ -31,7 +31,7 @@ class Assistant(context: Context, private val host: AssistantHost) {
     private val engine = CommandEngine(appContext)
     private val weather = Weather(appContext)
     private val contacts = ContactsHelper(appContext)
-
+    private val system = SystemControl(appContext)
     val ai = AiClient(appContext)
     val memory = MemoryStore(appContext)
     val settings = AppSettings(appContext)
