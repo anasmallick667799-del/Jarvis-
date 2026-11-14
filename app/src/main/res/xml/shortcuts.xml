@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<shortcuts xmlns:android="http://schemas.android.com/apk/res/android">
+    <shortcut
+        android:shortcutId="listen"
+        android:enabled="true"
+        android:icon="@drawable/ic_launcher_foreground"
+        android:shortcutShortLabel="@string/shortcut_listen"
+        android:shortcutLongLabel="@string/shortcut_listen_long">
+        <intent
+            android:action="android.intent.action.MAIN"
+            android:targetPackage="com.jarvis.assistant"
+            android:targetClass="com.jarvis.assistant.MainActivity">
+            <extra
+                android:name="auto_listen"
+                android:value="true" />
+        </intent>
+    </shortcut>
+</shortcuts>
