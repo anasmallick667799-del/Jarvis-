@@ -176,7 +176,14 @@ class Assistant(context: Context, private val host: AssistantHost) {
             }
             return
         }
-
+        // 8b. phone control: settings pages, volume percent, brightness, camera
+        if (!low.startsWith("ai ")) {
+            val sys = system.handle(low)
+            if (sys != null) {
+                answer(sys)
+                return
+            }
+        }
         // 9. offline engine, warna AI
         val forceAi = low.startsWith("ai ")
         if (!forceAi) {
