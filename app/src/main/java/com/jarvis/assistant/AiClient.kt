@@ -17,8 +17,17 @@ class AiClient(context: Context) {
 
     var url: String = prefs.getString("url", "") ?: ""
         private set
-    var token: String = prefs.getString("token", "") ?: ""
+        var token: String = loadToken()
         private set
+
+    private fun loadToken(): String {
+        val raw = prefs.getString("token", "") ?: ""
+        val plain = Secure.decrypt(raw)
+        if (raw.isNotEmpty() && !raw.startsWith("enc:")) {
+            prefs.edit().putString("token", Secure.encrypt(plain)).apply()
+        }
+        return plain
+    }
 
     fun isConfigured(): Boolean = url.isNotBlank() && token.isNotBlank()
 
