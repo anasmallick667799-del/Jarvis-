@@ -2,6 +2,8 @@ package com.jarvis.assistant
 
 import android.Manifest
 import android.app.Activity
+import android.app.ActivityManager
+import android.content.Context
 import android.content.Intent
 import android.os.Bundle
 import android.speech.RecognizerIntent
@@ -39,6 +41,8 @@ import androidx.compose.ui.unit.sp
 class MainActivity : ComponentActivity() {
 
     private val listenSignal = mutableStateOf(0)
+    private val relockSignal = mutableStateOf(0)
+    private var stoppedAt = 0L
 
     private fun wantsListen(i: Intent?): Boolean =
         i?.extras?.get("auto_listen")?.toString() == "true"
@@ -48,7 +52,7 @@ class MainActivity : ComponentActivity() {
         if (savedInstanceState == null && wantsListen(intent)) {
             listenSignal.value = listenSignal.value + 1
         }
-        setContent { JarvisScreen(listenSignal) }
+        setContent { JarvisScreen(listenSignal, relockSignal) }
     }
 
     override fun onNewIntent(intent: Intent) {
@@ -58,25 +62,50 @@ class MainActivity : ComponentActivity() {
             listenSignal.value = listenSignal.value + 1
         }
     }
+
+    override fun onStop() {
+        super.onStop()
+        stoppedAt = System.currentTimeMillis()
+    }
+
+    override fun onStart() {
+        super.onStart()
+        if (stoppedAt > 0 &&
+            System.currentTimeMillis() - stoppedAt > 30_000 &&
+            PinStore(this).hasPin()
+        ) {
+            relockSignal.value = relockSignal.value + 1
+        }
+    }
 }
 
 @Composable
-fun JarvisScreen(listenSignal: androidx.compose.runtime.MutableState<Int>) {
+fun JarvisScreen(
+    listenSignal: androidx.compose.runtime.MutableState<Int>,
+    relockSignal: androidx.compose.runtime.MutableState<Int>
+) {
     val context = LocalContext.current
     val chat = remember { ChatStore(context.applicationContext) }
+    val pinStore = remember { PinStore(context.applicationContext) }
+    var locked by remember { mutableStateOf(pinStore.hasPin()) }
+    var pinOn by remember { mutableStateOf(pinStore.hasPin()) }
     var state by remember { mutableStateOf(JState.SLEEPING) }
     var input by remember { mutableStateOf("") }
     var showSetup by remember { mutableStateOf(false) }
     var showSettings by remember { mutableStateOf(false) }
+    var showSecurity by remember { mutableStateOf(false) }
+    var showWipe by remember { mutableStateOf(false) }
+    var pinForm by remember { mutableStateOf(0) }
     var showContactsWhy by remember { mutableStateOf(false) }
     var pendingCallName by remember { mutableStateOf<String?>(null) }
     var pendingFact by remember { mutableStateOf<String?>(null) }
     var pendingFromAi by remember { mutableStateOf(false) }
+    var handledSignal by remember { mutableStateOf(0) }
     val messages = remember {
         val saved = chat.load()
         mutableStateListOf<Pair<String, String>>().apply {
             if (saved.isEmpty()) {
-                add("JARVIS" to "Namaste! Main JARVIS hoon. MIC dabake bolo ya text likho. Time, battery, calculator, notes, alarm, timer, torch, mausam, joke, naam se call, sab try karo. 'help' likho toh list milegi.")
+                add("JARVIS" to "Namaste! Main JARVIS hoon. MIC dabake bolo ya text likho. Time, battery, calculator, notes, alarm, reminders, tasks, mausam, joke, naam se call, sab try karo. 'help' likho toh list milegi.")
             } else {
                 addAll(saved)
             }
@@ -102,8 +131,8 @@ fun JarvisScreen(listenSignal: androidx.compose.runtime.MutableState<Int>) {
 
     fun showReply(r: String) {
         messages.add("JARVIS" to r)
-        speaker.speak(r)
-        if (!speaker.enabled || !speaker.isReady) state = JState.SLEEPING
+        if (!locked) speaker.speak(r)
+        if (locked || !speaker.enabled || !speaker.isReady) state = JState.SLEEPING
     }
 
     val assistant = remember {
@@ -207,6 +236,13 @@ fun JarvisScreen(listenSignal: androidx.compose.runtime.MutableState<Int>) {
         )
     }
 
+    fun wipeAll() {
+        ReminderScheduler.cancelAll(context)
+        Secure.deleteKey()
+        val am = context.getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager
+        am.clearApplicationUserData()
+    }
+
     DisposableEffect(Unit) {
         onDispose { speaker.shutdown() }
     }
@@ -215,158 +251,260 @@ fun JarvisScreen(listenSignal: androidx.compose.runtime.MutableState<Int>) {
         chat.save(messages.toList())
         if (messages.isNotEmpty()) listState.animateScrollToItem(messages.size - 1)
     }
-    LaunchedEffect(listenSignal.value) {
-        if (listenSignal.value > 0) startListening()
-    }
-    if (showContactsWhy) {
-        ContactsWhyDialog(
-            onAllow = {
-                showContactsWhy = false
-                contactsLauncher.launch(Manifest.permission.READ_CONTACTS)
-            },
-            onCancel = {
-                showContactsWhy = false
-                pendingCallName = null
-            }
-        )
+
+    LaunchedEffect(relockSignal.value) {
+        if (relockSignal.value > 0 && pinStore.hasPin()) {
+            locked = true
+            showSetup = false
+            showSettings = false
+            showSecurity = false
+            showWipe = false
+            pinForm = 0
+        }
     }
 
-    if (showSettings) {
-        SettingsDialog(
-            rate = rate,
-            pitch = pitch,
-            suggestOn = suggestOn,
-            onRate = {
-                rate = it
-                speaker.setVoiceStyle(rate, pitch)
-                sample()
-            },
-            onPitch = {
-                pitch = it
-                speaker.setVoiceStyle(rate, pitch)
-                sample()
-            },
-            onToggleSuggest = {
-                suggestOn = !suggestOn
-                assistant.settings.suggestions = suggestOn
-            },
-            onClearChat = {
-                messages.clear()
-                chat.clear()
-                assistant.ai.clearHistory()
-                messages.add("JARVIS" to "Chat saaf kar di. Yaadein (memory) waise hi hain.")
-            },
-            onClearMemory = {
-                assistant.memory.clear()
-                messages.add("JARVIS" to "Saari yaadein mita di.")
-            },
-            onClose = { showSettings = false }
-        )
+    LaunchedEffect(listenSignal.value, locked) {
+        if (!locked && listenSignal.value > handledSignal) {
+            handledSignal = listenSignal.value
+            startListening()
+        }
     }
 
-    val pf = pendingFact
-    if (pf != null) {
-        MemoryConfirmDialog(
-            fact = pf,
-            fromAi = pendingFromAi,
-            onYes = {
-                val ok = assistant.memory.add(pf)
-                pendingFact = null
-                showReply(
-                    if (ok) {
-                        "Theek hai, yaad rakh liya: $pf"
-                    } else {
-                        "Yeh pehle se yaad hai ya memory bhar gayi hai (30 yaadein)."
-                    }
-                )
-            },
-            onNo = {
-                pendingFact = null
-                messages.add("JARVIS" to "Theek hai, yaad nahi rakha.")
-            }
-        )
-    }
-
-    if (showSetup) {
-        AiSetupDialog(
-            url = urlInput,
-            token = tokenInput,
-            onUrl = { urlInput = it },
-            onToken = { tokenInput = it },
-            onSave = {
-                assistant.ai.save(urlInput, tokenInput)
-                aiOn = assistant.ai.isConfigured()
-                showSetup = false
-                val msg = if (aiOn) {
-                    "AI setup save ho gaya. Ab koi bhi sawaal pucho, ya 'ai ...' se shuru karo."
-                } else {
-                    "URL ya token khaali hai, AI abhi off hai."
+    if (locked) {
+        LockScreen(pinStore) { locked = false }
+    } else {
+        if (showContactsWhy) {
+            ContactsWhyDialog(
+                onAllow = {
+                    showContactsWhy = false
+                    contactsLauncher.launch(Manifest.permission.READ_CONTACTS)
+                },
+                onCancel = {
+                    showContactsWhy = false
+                    pendingCallName = null
                 }
-                messages.add("JARVIS" to msg)
-            },
-            onCancel = { showSetup = false }
-        )
-    }
-
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(Color(0xFF020814))
-            .statusBarsPadding()
-            .navigationBarsPadding()
-            .padding(16.dp),
-        horizontalAlignment = Alignment.CenterHorizontally
-    ) {
-        Text(
-            "J.A.R.V.I.S",
-            color = Color(0xFF4FC3F7),
-            fontSize = 24.sp,
-            fontWeight = FontWeight.Bold
-        )
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(10.dp)
-        ) {
-            Text(state.label, color = state.color, fontSize = 13.sp)
-            SmallButton(if (aiOn) "AI: ON" else "AI SETUP") {
-                urlInput = assistant.ai.url
-                tokenInput = assistant.ai.token
-                showSetup = true
-            }
-            SmallButton("SETTINGS") { showSettings = true }
+            )
         }
 
-        Orb(state) { startListening() }
-
-        Wave(active = state != JState.SLEEPING, color = state.color)
-
-        Row(
-            modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp),
-            horizontalArrangement = Arrangement.SpaceEvenly,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            SmallButton("■ STOP", Color(0xFFEF5350)) {
-                speaker.stop()
-                state = JState.SLEEPING
-            }
-            SmallButton(if (voiceOn) "VOICE ON" else "VOICE OFF") {
-                voiceOn = !voiceOn
-                speaker.turnVoice(voiceOn)
-                if (!voiceOn && state == JState.SPEAKING) state = JState.SLEEPING
-            }
-            SmallButton("NEXT") {
-                messages.add("JARVIS" to speaker.nextVoice())
-                sample()
-            }
-            SmallButton(if (lang == "en") "LANG EN" else "LANG HI") {
-                messages.add("JARVIS" to speaker.toggleLang())
-                lang = speaker.lang
-                sample()
-            }
+        if (showSettings) {
+            SettingsDialog(
+                rate = rate,
+                pitch = pitch,
+                suggestOn = suggestOn,
+                onRate = {
+                    rate = it
+                    speaker.setVoiceStyle(rate, pitch)
+                    sample()
+                },
+                onPitch = {
+                    pitch = it
+                    speaker.setVoiceStyle(rate, pitch)
+                    sample()
+                },
+                onToggleSuggest = {
+                    suggestOn = !suggestOn
+                    assistant.settings.suggestions = suggestOn
+                },
+                onClearChat = {
+                    messages.clear()
+                    chat.clear()
+                    assistant.ai.clearHistory()
+                    messages.add("JARVIS" to "Chat saaf kar di. Yaadein (memory) waise hi hain.")
+                },
+                onClearMemory = {
+                    assistant.memory.clear()
+                    messages.add("JARVIS" to "Saari yaadein mita di.")
+                },
+                onClose = { showSettings = false }
+            )
         }
 
-        ChatList(messages, listState, Modifier.weight(1f).fillMaxWidth())
+        if (showSecurity) {
+            SecurityDialog(
+                pinOn = pinOn,
+                onSetPin = {
+                    showSecurity = false
+                    pinForm = 1
+                },
+                onRemovePin = {
+                    showSecurity = false
+                    pinForm = 2
+                },
+                onLockNow = {
+                    showSecurity = false
+                    locked = true
+                },
+                onWipe = {
+                    showSecurity = false
+                    showWipe = true
+                },
+                onClose = { showSecurity = false }
+            )
+        }
 
-        InputBar(input, { input = it }, { send() })
+        if (pinForm == 1) {
+            val has = pinOn
+            PinFormDialog(
+                title = if (has) "PIN badlo" else "PIN set karo",
+                hints = if (has) {
+                    listOf("Purana PIN", "Naya PIN (4 se 6 ank)", "Naya PIN dobara")
+                } else {
+                    listOf("Naya PIN (4 se 6 ank)", "Naya PIN dobara")
+                },
+                onSubmit = { v ->
+                    val old = if (has) v[0] else ""
+                    val n1 = if (has) v[1] else v[0]
+                    val n2 = if (has) v[2] else v[1]
+                    if (has && !pinStore.check(old)) {
+                        "Purana PIN galat hai."
+                    } else if (!Regex("\\d{4,6}").matches(n1)) {
+                        "PIN sirf 4 se 6 ank ka hona chahiye."
+                    } else if (n1 != n2) {
+                        "Dono PIN alag hain."
+                    } else {
+                        pinStore.setPin(n1)
+                        pinOn = true
+                        messages.add("JARVIS" to "PIN set ho gaya. App 30 second se zyada background mein rahi toh lock ho jayegi.")
+                        null
+                    }
+                },
+                onClose = { pinForm = 0 }
+            )
+        }
+
+        if (pinForm == 2) {
+            PinFormDialog(
+                title = "PIN hatao",
+                hints = listOf("Abhi ka PIN"),
+                onSubmit = { v ->
+                    if (pinStore.check(v[0])) {
+                        pinStore.remove()
+                        pinOn = false
+                        messages.add("JARVIS" to "PIN lock hata diya.")
+                        null
+                    } else {
+                        "PIN galat hai."
+                    }
+                },
+                onClose = { pinForm = 0 }
+            )
+        }
+
+        if (showWipe) {
+            WipeConfirmDialog(
+                onYes = {
+                    showWipe = false
+                    wipeAll()
+                },
+                onNo = { showWipe = false }
+            )
+        }
+
+        val pf = pendingFact
+        if (pf != null) {
+            MemoryConfirmDialog(
+                fact = pf,
+                fromAi = pendingFromAi,
+                onYes = {
+                    val ok = assistant.memory.add(pf)
+                    pendingFact = null
+                    showReply(
+                        if (ok) {
+                            "Theek hai, yaad rakh liya: $pf"
+                        } else {
+                            "Yeh pehle se yaad hai ya memory bhar gayi hai (30 yaadein)."
+                        }
+                    )
+                },
+                onNo = {
+                    pendingFact = null
+                    messages.add("JARVIS" to "Theek hai, yaad nahi rakha.")
+                }
+            )
+        }
+
+        if (showSetup) {
+            AiSetupDialog(
+                url = urlInput,
+                token = tokenInput,
+                onUrl = { urlInput = it },
+                onToken = { tokenInput = it },
+                onSave = {
+                    assistant.ai.save(urlInput, tokenInput)
+                    aiOn = assistant.ai.isConfigured()
+                    showSetup = false
+                    val msg = if (aiOn) {
+                        "AI setup save ho gaya. Ab koi bhi sawaal pucho, ya 'ai ...' se shuru karo."
+                    } else {
+                        "URL ya token khaali hai, AI abhi off hai."
+                    }
+                    messages.add("JARVIS" to msg)
+                },
+                onCancel = { showSetup = false }
+            )
+        }
+
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(Color(0xFF020814))
+                .statusBarsPadding()
+                .navigationBarsPadding()
+                .padding(16.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            Text(
+                "J.A.R.V.I.S",
+                color = Color(0xFF4FC3F7),
+                fontSize = 24.sp,
+                fontWeight = FontWeight.Bold
+            )
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Text(state.label, color = state.color, fontSize = 13.sp)
+                SmallButton(if (aiOn) "AI: ON" else "AI SETUP") {
+                    urlInput = assistant.ai.url
+                    tokenInput = assistant.ai.token
+                    showSetup = true
+                }
+                SmallButton("SETTINGS") { showSettings = true }
+                SmallButton("LOCK") { showSecurity = true }
+            }
+
+            Orb(state) { startListening() }
+
+            Wave(active = state != JState.SLEEPING, color = state.color)
+
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp),
+                horizontalArrangement = Arrangement.SpaceEvenly,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                SmallButton("■ STOP", Color(0xFFEF5350)) {
+                    speaker.stop()
+                    state = JState.SLEEPING
+                }
+                SmallButton(if (voiceOn) "VOICE ON" else "VOICE OFF") {
+                    voiceOn = !voiceOn
+                    speaker.turnVoice(voiceOn)
+                    if (!voiceOn && state == JState.SPEAKING) state = JState.SLEEPING
+                }
+                SmallButton("NEXT") {
+                    messages.add("JARVIS" to speaker.nextVoice())
+                    sample()
+                }
+                SmallButton(if (lang == "en") "LANG EN" else "LANG HI") {
+                    messages.add("JARVIS" to speaker.toggleLang())
+                    lang = speaker.lang
+                    sample()
+                }
+            }
+
+            ChatList(messages, listState, Modifier.weight(1f).fillMaxWidth())
+
+            InputBar(input, { input = it }, { send() })
+        }
     }
 }
