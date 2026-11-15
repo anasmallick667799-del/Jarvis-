@@ -17,23 +17,27 @@ class AiClient(context: Context) {
 
     var url: String = prefs.getString("url", "") ?: ""
         private set
-        var token: String = loadToken()
+    var token: String = loadToken()
         private set
-
-    private fun loadToken(): String {
-        val raw = prefs.getString("token", "") ?: ""
-        val plain = Secure.decrypt(raw)
-        if (raw.isNotEmpty() && !raw.startsWith("enc:")) {
-            prefs.edit().putString("url", url).putString("token", Secure.encrypt(token)).apply()
-        return plain
-    }
 
     fun isConfigured(): Boolean = url.isNotBlank() && token.isNotBlank()
 
     fun save(newUrl: String, newToken: String) {
         url = newUrl.trim().trimEnd('/')
         token = newToken.trim()
-        prefs.edit().putString("url", url).putString("token", token).apply()
+        prefs.edit()
+            .putString("url", url)
+            .putString("token", Secure.encrypt(token))
+            .apply()
+    }
+
+    private fun loadToken(): String {
+        val raw = prefs.getString("token", "") ?: ""
+        val plain = Secure.decrypt(raw)
+        if (raw.isNotEmpty() && !raw.startsWith("enc:")) {
+            prefs.edit().putString("token", Secure.encrypt(plain)).apply()
+        }
+        return plain
     }
 
     private fun loadHistory(): MutableList<Pair<String, String>> {
@@ -101,7 +105,7 @@ class AiClient(context: Context) {
                     }
                 }
             } catch (e: Exception) {
-                error = "Connection error: " + e.javaClass.simpleName + " " + (e.message ?: "")
+                error = "Internet nahi hai ya Worker tak pahunch nahi paaya."
             }
             val finalReply = reply
             val finalError = error
