@@ -24,8 +24,7 @@ class AiClient(context: Context) {
         val raw = prefs.getString("token", "") ?: ""
         val plain = Secure.decrypt(raw)
         if (raw.isNotEmpty() && !raw.startsWith("enc:")) {
-            prefs.edit().putString("token", Secure.encrypt(plain)).apply()
-        }
+            prefs.edit().putString("url", url).putString("token", Secure.encrypt(token)).apply()
         return plain
     }
 
