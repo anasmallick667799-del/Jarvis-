@@ -32,6 +32,8 @@ class Assistant(context: Context, private val host: AssistantHost) {
     private val weather = Weather(appContext)
     private val contacts = ContactsHelper(appContext)
     private val system = SystemControl(appContext)
+    private val planner = Planner(appContext)
+
     val ai = AiClient(appContext)
     val memory = MemoryStore(appContext)
     val settings = AppSettings(appContext)
@@ -132,12 +134,17 @@ class Assistant(context: Context, private val host: AssistantHost) {
             return
         }
 
-        // 5. schedule/reminder abhi bana nahi
+        // 5. reminders, tasks, schedule
+        val pl = planner.handle(low, t)
+        if (pl != null) {
+            answer(pl)
+            return
+        }
         val personalDay = tk.any { it in setOf("mera", "meri", "mere", "aaj", "kal", "my", "today", "tomorrow") }
         val plannerWord = tk.any { it in setOf("schedule", "reminder", "reminders", "homework", "task", "tasks") } ||
             low.contains("yaad dila")
         if (personalDay && plannerWord) {
-            answer("Reminder, task aur schedule ka system abhi bana nahi hai, yeh agle phases mein aayega. Abhi alarm ya timer laga sakta hoon.")
+            answer("Yeh mujhe samajh nahi aaya. Aise bolo: kal subah 6 baje maths ka reminder lagao, mere reminders dikhao, task add karo homework, tasks dikhao, aaj ka schedule.")
             return
         }
 
@@ -176,6 +183,7 @@ class Assistant(context: Context, private val host: AssistantHost) {
             }
             return
         }
+
         // 8b. phone control: settings pages, volume percent, brightness, camera
         if (!low.startsWith("ai ")) {
             val sys = system.handle(low)
@@ -184,6 +192,7 @@ class Assistant(context: Context, private val host: AssistantHost) {
                 return
             }
         }
+
         // 9. offline engine, warna AI
         val forceAi = low.startsWith("ai ")
         if (!forceAi) {
